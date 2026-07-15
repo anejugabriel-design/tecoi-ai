@@ -78,14 +78,35 @@ function loadDotEnv(){
     return loadedCount;
 }
 
-// Asks for the key interactively on first run (no .env, no env var
-// already set) and offers to save it into a .env file right next to the
-// exe/script, so this only ever has to happen once.
+// ---- Shared API key (optional) -----------------------------------------
+// Fill this in with YOUR OpenRouter key to let everyone who downloads
+// Tecoi use it without needing their own — they'll never even see the
+// key-setup prompt. Leave it blank ("") to require each person to bring
+// their own key instead (the original, more secure behavior).
+//
+// ⚠️ Whatever you put here is PLAIN TEXT inside this file. Anyone who
+// downloads Tecoi can open it and read/copy this key directly — this
+// key is not protected, hidden, or obfuscated by putting it here. Only
+// use a key you're comfortable with total strangers being able to see
+// and use however they want, completely outside of Tecoi. If you'd
+// rather keep the key itself hidden while still sharing access to it,
+// that requires a server-side proxy instead of this — ask if you want
+// that built.
+const SHARED_API_KEY = "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";
+
+// A person's own key (via .env or an env var) always takes priority over
+// the shared one above, so anyone who wants to use their own account
+// still can.
 async function ensureApiKey(){
     const loaded = loadDotEnv();
     if(loaded) console.log("(.env found — loaded " + loaded + " variable" + (loaded === 1 ? "" : "s") + ")");
 
     if(process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+
+    if(SHARED_API_KEY){
+        process.env.OPENROUTER_API_KEY = SHARED_API_KEY;
+        return SHARED_API_KEY;
+    }
 
     console.log("\n👋 First time running Tecoi — it needs an OpenRouter API key.");
     console.log("   Get a free one at https://openrouter.ai/keys\n");
