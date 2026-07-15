@@ -309,13 +309,13 @@ async function main(){
 
         history.push({ role: "user", content: trimmed });
 
-        process.stdout.write("tecoi> thinking...\r");
+        console.log("tecoi> thinking...");
 
         let reply;
         try{
             reply = await callModel(history);
         }catch(e){
-            console.log("tecoi> ❌ " + e.message + "                    ");
+            console.log("tecoi> ❌ " + e.message);
             history.pop(); // don't poison history with a failed turn
             continue;
         }
@@ -323,9 +323,9 @@ async function main(){
         history.push({ role: "assistant", content: reply });
 
         const blocks = extractBlocks(reply);
-        const prose = reply.replace(/```(FILE:[^\n]+|RUN)\n[\s\S]*?```/g, "").trim();
+        const prose = reply.replace(/```(FILE:[^\n]+|MOVE:[^\n]+|DELETE:[^\n]+|RUN)\n[\s\S]*?```/g, "").trim();
 
-        console.log("tecoi>" + (prose ? " " + prose : "") + "                    \n");
+        console.log("tecoi>" + (prose ? " " + prose : "") + "\n");
 
         if(blocks.length){
             await applyBlocks(blocks);
