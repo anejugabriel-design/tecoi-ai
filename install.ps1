@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 
 # EDIT THIS before hosting — point it at wherever you actually put
 # tecoi-cli.js (e.g. a raw GitHub URL to the file itself).
-$tecoiScriptUrl = "https://raw.githubusercontent.com/YOUR-USERNAME/YOUR-REPO/main/tecoi-cli.js"
+$tecoiScriptUrl = "https://raw.githubusercontent.com/anejugabriel-design/tecoi-ai/main/tecoi-cli.js"
 
 $installDir = Join-Path $env:USERPROFILE "Desktop\Tecoi AI"
 
