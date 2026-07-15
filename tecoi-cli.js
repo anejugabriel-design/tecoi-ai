@@ -92,7 +92,168 @@ function loadDotEnv(){
 // rather keep the key itself hidden while still sharing access to it,
 // that requires a server-side proxy instead of this — ask if you want
 // that built.
-const SHARED_API_KEY = "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";
+const SHARED_API_KEY = "";
+
+// ---- Techia AI account — login + conversation history sync -------------
+// Same Supabase project the web app (index.html) uses. Logging in here
+// ties Tecoi to a real Techia AI account, and conversation history is
+// saved to (and loaded from) that account's techia_chats table, so
+// closing and reopening Tecoi picks up right where you left off instead
+// of starting blank every time.
+const SUPABASE_URL = "https://dutfoujfaqmciucgauvi.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR1dGZvdWpmYXFtY2l1Y2dhdXZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzNDU0NTUsImV4cCI6MjA5NzkyMTQ1NX0.1y_UP_WD4pfVVrl8sYKLXGel8AHj9Dr7m1NLoy44srU";
+const SUPABASE_AUTH = SUPABASE_URL + "/auth/v1";
+const SUPABASE_REST = SUPABASE_URL + "/rest/v1";
+const SESSION_PATH = path.join(APP_DIR, ".tecoi-session.json");
+
+function loadSession(){
+    try{
+        if(!fs.existsSync(SESSION_PATH)) return null;
+        return JSON.parse(fs.readFileSync(SESSION_PATH, "utf8"));
+    }catch(e){
+        return null;
+    }
+}
+
+function saveSession(session){
+    try{
+        fs.writeFileSync(SESSION_PATH, JSON.stringify(session));
+    }catch(e){
+        console.log("⚠️  Couldn't save your login (" + e.message + ") — you'll be asked to log in again next time.");
+    }
+}
+
+async function loginToTechia(){
+    console.log("\n🔐 Log in to your Techia AI account to save conversation history to it.");
+    console.log("   (Same email/password as the Techia AI website.)\n");
+
+    const email = await ask("Email: ");
+    const password = await ask("Password: ");
+
+    const res = await fetch(SUPABASE_AUTH + "/token?grant_type=password", {
+        method: "POST",
+        headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password: password })
+    });
+    const data = await res.json();
+
+    if(!res.ok || !data.access_token){
+        console.log("\n❌ Login failed: " + ((data && data.error_description) || (data && data.msg) || "check your email/password") + "\n");
+        return null;
+    }
+
+    const session = {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+        user_id: data.user.id,
+        email: data.user.email
+    };
+    saveSession(session);
+    console.log("✅ Logged in as " + session.email + "\n");
+    return session;
+}
+
+async function refreshSession(session){
+    try{
+        const res = await fetch(SUPABASE_AUTH + "/token?grant_type=refresh_token", {
+            method: "POST",
+            headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: session.refresh_token })
+        });
+        const data = await res.json();
+        if(!res.ok || !data.access_token) return null;
+
+        const refreshed = {
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+            expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+            user_id: session.user_id,
+            email: session.email
+        };
+        saveSession(refreshed);
+        return refreshed;
+    }catch(e){
+        return null;
+    }
+}
+
+// Loads a saved session if there is one (refreshing it if it's stale),
+// or prompts to log in. Returns null if the person skips login — Tecoi
+// still works without an account, it just won't remember anything
+// between runs in that case.
+async function ensureTechiaSession(){
+    let session = loadSession();
+
+    if(session && session.expires_at < Math.floor(Date.now() / 1000) + 60){
+        session = await refreshSession(session);
+    }
+
+    if(session) return session;
+
+    const answer = await ask("Log in to Techia AI to save your conversation history to your account? (Y/n): ");
+    if(answer.trim().toLowerCase() === "n"){
+        console.log("Continuing without an account — conversation history won't be saved this session.\n");
+        return null;
+    }
+
+    return await loginToTechia();
+}
+
+function supabaseHeaders(session){
+    return {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + session.access_token,
+        "Content-Type": "application/json"
+    };
+}
+
+// Finds (or creates) the one persistent Tecoi conversation for this
+// account — reuses the same techia_chats table the web app's chat
+// history uses, tagged with model_id "tecoi-cli" so it doesn't mix with
+// web chats.
+async function loadOrCreateTecoiChat(session){
+    try{
+        const res = await fetch(
+            SUPABASE_REST + "/techia_chats?select=id,messages&user_id=eq." + session.user_id + "&model_id=eq.tecoi-cli&order=updated_at.desc&limit=1",
+            { headers: supabaseHeaders(session) }
+        );
+        const rows = await res.json();
+
+        if(res.ok && rows.length){
+            return { id: rows[0].id, messages: rows[0].messages || [] };
+        }
+
+        const createRes = await fetch(SUPABASE_REST + "/techia_chats", {
+            method: "POST",
+            headers: Object.assign(supabaseHeaders(session), { "Prefer": "return=representation" }),
+            body: JSON.stringify({
+                user_id: session.user_id,
+                title: "Tecoi CLI",
+                summary: "Terminal coding sessions",
+                model_id: "tecoi-cli",
+                messages: []
+            })
+        });
+        const created = await createRes.json();
+        if(createRes.ok && created[0]) return { id: created[0].id, messages: [] };
+    }catch(e){
+        console.log("⚠️  Couldn't reach your Techia AI account (" + e.message + ") — continuing without saved history this session.");
+    }
+    return null;
+}
+
+async function saveTecoiChat(session, chatId, messages){
+    try{
+        await fetch(SUPABASE_REST + "/techia_chats?id=eq." + chatId, {
+            method: "PATCH",
+            headers: supabaseHeaders(session),
+            body: JSON.stringify({ messages: messages, updated_at: new Date().toISOString() })
+        });
+    }catch(e){
+        // Non-critical — worst case this turn doesn't get saved, next one still tries.
+    }
+}
 
 // A person's own key (via .env or an env var) always takes priority over
 // the shared one above, so anyone who wants to use their own account
@@ -310,17 +471,48 @@ async function applyBlocks(blocks){
 }
 
 // ---- Main REPL loop -----------------------------------------------------
+function printBanner(){
+    const width = 26;
+    function line(visibleText, styledText){
+        const padding = " ".repeat(Math.max(0, width - visibleText.length));
+        return "║" + (styledText || visibleText) + padding + "║";
+    }
+    console.log("");
+    console.log("  \x1b[35m╔" + "═".repeat(width) + "╗\x1b[0m");
+    console.log("  \x1b[35m" + line("   T E C O I   A I", "   \x1b[1mT E C O I   A I\x1b[0m\x1b[35m") + "\x1b[0m");
+    console.log("  \x1b[35m" + line("   terminal coding agent") + "\x1b[0m");
+    console.log("  \x1b[35m╚" + "═".repeat(width) + "╝\x1b[0m");
+    console.log("");
+}
+
 async function main(){
-    console.log("\n🛠️  Tecoi AI — terminal coding assistant");
+    printBanner();
 
     await ensureApiKey();
 
+    const session = await ensureTechiaSession();
+
     console.log("Working in: " + CWD);
     console.log("Model: " + MODEL + "  (override with TECOI_MODEL=...)");
+    if(session) console.log("Account: " + session.email + " — conversation history is being saved");
     console.log("Type a request, or \"exit\" to quit.\n");
 
     const files = listProjectFiles(CWD);
-    const history = [{ role: "system", content: buildSystemPrompt(files) }];
+    let conversation = [];
+    let cloudChatId = null;
+
+    if(session){
+        const chat = await loadOrCreateTecoiChat(session);
+        if(chat){
+            cloudChatId = chat.id;
+            conversation = chat.messages || [];
+            if(conversation.length){
+                console.log("(picked up where you left off — " + conversation.length + " earlier message" + (conversation.length === 1 ? "" : "s") + " loaded)\n");
+            }
+        }
+    }
+
+    const history = [{ role: "system", content: buildSystemPrompt(files) }].concat(conversation);
 
     while(true){
         const input = await ask("you> ");
@@ -342,6 +534,10 @@ async function main(){
         }
 
         history.push({ role: "assistant", content: reply });
+
+        if(cloudChatId){
+            saveTecoiChat(session, cloudChatId, history.slice(1)); // slice off the system prompt — it's regenerated fresh each run
+        }
 
         const blocks = extractBlocks(reply);
         const prose = reply.replace(/```(FILE:[^\n]+|MOVE:[^\n]+|DELETE:[^\n]+|RUN)\n[\s\S]*?```/g, "").trim();
