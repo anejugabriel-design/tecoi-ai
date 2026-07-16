@@ -92,7 +92,7 @@ function loadDotEnv(){
 // rather keep the key itself hidden while still sharing access to it,
 // that requires a server-side proxy instead of this — ask if you want
 // that built.
-const SHARED_API_KEY = "";
+const SHARED_API_KEY = "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";
 
 // ---- Techia AI account — login + conversation history sync -------------
 // Same Supabase project the web app (index.html) uses. Logging in here
